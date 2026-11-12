@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Z-Run: Street Survival GPS</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Draw CSS & JS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* Custom map dark filter & full viewport layout */
+        html, body {
+            height: 100%;
+            width: 100vw;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #090d16;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            user-select: none;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+            z-index: 1;
+        }
+
+        /* Dark apocalyptic map tiles overlay */
+        .dark-tiles .leaflet-tile-container img {
+            filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
+        }
+
+        /* Custom SVG Radar Pulsing Marker */
+        .player-pulse-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pulse-ring {
+            border: 2px solid #10b981;
+            border-radius: 50%;
+            height: 36px;
+            width: 36px;
+            position: absolute;
+            animation: pulsedisperse 1.8s infinite ease-out;
+            opacity: 0;
+        }
+        @keyframes pulsedisperse {
+            0% { transform: scale(0.3); opacity: 0.9; }
+            80% { opacity: 0.4; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+
+        /* Zombie marker pulse effect */
+        .zombie-pulse-ring {
+            border: 2px solid #ef4444;
+            border-radius: 50%;
+            height: 36px;
+            width: 36px;
+            position: absolute;
+            animation: zombiePulse 1.2s infinite ease-out;
+            opacity: 0;
+        }
+        @keyframes zombiePulse {
+            0% { transform: scale(0.4); opacity: 1; }
+            100% { transform: scale(1.8); opacity: 0; }
+        }
+
+        /* Red flash overlay for imminent danger */
+        .danger-flash {
+            animation: flashBorder 0.8s infinite alternate;
+        }
+        @keyframes flashBorder {
+            0% { box-shadow: inset 0 0 10px rgba(239, 68, 68, 0.2); }
+            100% { box-shadow: inset 0 0 50px rgba(239, 68, 68, 0.85); }
+        }
+
+        /* Virtual Joystick Styles */
+        .joystick-base {
+            width: 100px;
+            height: 100px;
+            background: rgba(15, 23, 42, 0.75);
+            border: 2px solid rgba(16, 185, 129, 0.5);
+            border-radius: 50%;
+            position: relative;
+            touch-action: none;
+            backdrop-filter: blur(8px);
+        }
+        .joystick-stick {
+            width: 40px;
+            height: 40px;
+            background: #10b981;
+            border-radius: 50%;
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.8);
+            transition: background-color 0.2s;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111827;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="text-slate-100 flex flex-col relative">
+
+    <!-- Screen Flash Overlay on Danger -->
+    <div id="danger-overlay" class="pointer-events-none absolute inset-0 z-20 transition-all duration-300"></div>
+
+    <!-- MAIN MAP -->
+    <div id="map"></div>
+
+    <!-- TOP HUD BAR -->
+    <div id="hud-top" class="absolute top-3 left-3 right-3 z-10 flex flex-wrap justify-between items-center gap-2 pointer-events-none">
+        <!-- Status & Stats -->
+        <div class="bg-slate-900/90 backdrop-blur-md border border-slate-700/60 rounded-xl px-4 py-2.5 shadow-2xl flex items-center space-x-4 pointer-events-auto">
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-heart-pulse text-red-500 text-lg animate-pulse"></i>
+                <div class="w-24 bg-slate-800 rounded-full h-3 border border-slate-700 overflow-hidden">
+                    <div id="hp-bar" class="bg-gradient-to-r from-red-600 to-emerald-500 h-full w-full transition-all duration-300"></div>
+                </div>
+                <span id="hp-text" class="text-xs font-mono font-bold text-slate-200">100 HP</span>
+            </div>
+            
+            <div class="h-6 w-px bg-slate-700"></div>
+
+            <div class="flex items-center space-x-1 text-emerald-400 font-mono text-sm font-bold">
+                <i class="fa-solid fa-trophy text-amber-400"></i>
+                <span id="hud-score">0</span> pts
+            </div>
+        </div>
+
+        <!-- System Controls -->
+        <div class="flex items-center gap-2 pointer-events-auto">
+            <button id="audio-toggle-btn" class="bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-300 p-2.5 rounded-xl shadow-lg transition">
+                <i id="audio-icon" class="fa-solid fa-volume-high text-emerald-400"></i>
+            </button>
+            <button id="sim-mode-btn" class="bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-xs text-amber-400 font-semibold px-3 py-2.5 rounded-xl shadow-lg flex items-center space-x-1.5 transition">
+                <i class="fa-solid fa-gamepad"></i>
+                <span id="sim-mode-text">GPS Mode</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- GPS ERROR / FALLBACK NOTIFICATION BANNER -->
+    <div id="gps-error-banner" class="hidden absolute top-16 left-3 right-3 z-20 bg-amber-950/90 border border-amber-600/80 text-amber-200 p-3 rounded-xl backdrop-blur-md shadow-2xl flex items-center justify-between pointer-events-auto">
+        <div class="flex items-center space-x-2.5 text-xs">
+            <i class="fa-solid fa-triangle-exclamation text-amber-400 text-base"></i>
+            <div>
+                <div id="gps-error-title" class="font-bold">GPS Signal Unavailable</div>
+                <div id="gps-error-desc" class="text-[11px] text-amber-300/80">Switched to Manual Simulation Control. Use Joystick, WASD, or tap map.</div>
+            </div>
+        </div>
+        <button id="dismiss-gps-btn" class="bg-amber-800/80 hover:bg-amber-700 text-amber-100 text-xs px-2.5 py-1 rounded-lg">
+            Dismiss
+        </button>
+    </div>
+
+    <!-- VIRTUAL JOYSTICK OVERLAY (For simulation/indoor testing) -->
+    <div id="joystick-container" class="hidden absolute bottom-24 right-4 z-20 pointer-events-auto flex flex-col items-center">
+        <span class="text-[10px] text-emerald-400 font-mono font-bold mb-1 bg-slate-900/80 px-2 py-0.5 rounded border border-slate-700">TOUCH JOYSTICK</span>
+        <div id="joystick-base" class="joystick-base">
+            <div id="joystick-stick" class="joystick-stick"></div>
+        </div>
+    </div>
+
+    <!-- BOTTOM HUD DANGER & METRICS BAR -->
+    <div id="hud-bottom" class="absolute bottom-4 left-3 right-3 z-10 hidden pointer-events-none flex-col gap-2">
+        <!-- Threat Radar Alert -->
+        <div id="radar-alert" class="bg-red-950/90 backdrop-blur-md border border-red-600/80 rounded-xl p-2.5 text-center shadow-xl flex items-center justify-between px-4 animate-bounce">
+            <div class="flex items-center space-x-2 text-red-400 font-bold text-sm">
+                <i class="fa-solid fa-triangle-exclamation text-red-500"></i>
+                <span>ZOMBIE PROXIMITY WARNING</span>
+            </div>
+            <div id="threat-distance" class="font-mono text-xs font-extrabold text-red-300">
+                NEAREST: -- m
+            </div>
+        </div>
+
+        <!-- Telemetry HUD -->
+        <div class="bg-slate-900/90 backdrop-blur-md border border-slate-700/60 rounded-xl p-3 shadow-2xl grid grid-cols-4 gap-2 text-center pointer-events-auto">
+            <div class="flex flex-col">
+                <span class="text-[10px] text-slate-400 font-medium uppercase">Waypoints</span>
+                <span id="hud-waypoints" class="text-sm font-bold font-mono text-cyan-400">0/0</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-[10px] text-slate-400 font-medium uppercase">Distance</span>
+                <span id="hud-distance" class="text-sm font-bold font-mono text-slate-200">0.00 km</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-[10px] text-slate-400 font-medium uppercase">Speed</span>
+                <span id="hud-speed" class="text-sm font-bold font-mono text-emerald-400">0.0 km/h</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-[10px] text-slate-400 font-medium uppercase">Horde Count</span>
+                <span id="hud-zombies" class="text-sm font-bold font-mono text-red-400">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- SIMULATION KEYBOARD CONTROLS HELP (Shown in manual mode) -->
+    <div id="sim-controls-hint" class="hidden absolute left-4 top-20 z-10 bg-slate-900/90 border border-slate-700 text-slate-300 p-3 rounded-xl text-xs backdrop-blur-md max-w-xs shadow-xl">
+        <div class="font-bold text-amber-400 mb-1 flex items-center space-x-1">
+            <i class="fa-solid fa-keyboard"></i>
+            <span>Manual Simulation Mode Active</span>
+        </div>
+        <p class="text-slate-400 leading-tight">Use keyboard <kbd class="px-1 py-0.5 bg-slate-800 rounded border border-slate-600">W</kbd><kbd class="px-1 py-0.5 bg-slate-800 rounded border border-slate-600">A</kbd><kbd class="px-1 py-0.5 bg-slate-800 rounded border border-slate-600">S</kbd><kbd class="px-1 py-0.5 bg-slate-800 rounded border border-slate-600">D</kbd> or <kbd class="px-1 py-0.5 bg-slate-800 rounded border border-slate-600">Arrow Keys</kbd>, or simply <b>Click on the map</b> to simulate walking.</p>
+    </div>
+
+    <!-- SETUP / MISSION MODAL PANEL -->
+    <div id="setup-modal" class="absolute inset-0 z-30 bg-slate-950/80 backdrop-blur-lg flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl flex flex-col space-y-5">
+            <!-- Header -->
+            <div class="text-center">
+                <div class="inline-flex p-3 bg-red-950/60 rounded-2xl border border-red-800/50 mb-2">
+                    <i class="fa-solid fa-biohazard text-4xl text-red-500 animate-pulse"></i>
+                </div>
+                <h1 class="text-2xl font-black tracking-wider text-slate-100 uppercase">Z-RUN : OUTBREAK</h1>
+                <p class="text-xs text-slate-400 mt-1">Real-time GPS Street Survival & Fitness Game</p>
+            </div>
+
+            <!-- Step 1: Base Location -->
+            <div class="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 space-y-3">
+                <label class="text-xs font-bold text-slate-300 uppercase tracking-wide flex items-center justify-between">
+                    <span>1. Home Base Coordinates</span>
+                    <span id="home-status" class="text-emerald-400 text-[10px] lowercase font-mono">Not set</span>
+                </label>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="btn-gps-home" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
+                        <i class="fa-solid fa-location-crosshairs"></i>
+                        <span>Use Current GPS</span>
+                    </button>
+                    <button id="btn-map-home" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
+                        <i class="fa-solid fa-map-pin"></i>
+                        <span>Click Map Location</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 2: Boundary Selection -->
+            <div class="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 space-y-3">
+                <label class="text-xs font-bold text-slate-300 uppercase tracking-wide flex items-center justify-between">
+                    <span>2. Survival Zone Boundary</span>
+                    <span id="radius-val-display" class="text-cyan-400 font-mono text-xs">Radius: 500m</span>
+                </label>
+
+                <div class="space-y-2">
+                    <input id="radius-range" type="range" min="300" max="2000" step="100" value="500" class="w-full accent-cyan-500 bg-slate-800 h-2 rounded-lg cursor-pointer">
+                    <div class="flex justify-between text-[10px] text-slate-500 font-mono">
+                        <span>300m (Sprint)</span>
+                        <span>1km (Run)</span>
+                        <span>2km (Marathon)</span>
+                    </div>
+                </div>
+
+                <div class="pt-1 flex items-center justify-between border-t border-slate-800/60">
+                    <span class="text-xs text-slate-400">Or draw custom polygon:</span>
+                    <button id="btn-draw-poly" class="bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition">
+                        <i class="fa-solid fa-draw-polygon mr-1"></i> Draw Boundary
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 3: Difficulty & Zombie Speed -->
+            <div class="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 space-y-2">
+                <label class="text-xs font-bold text-slate-300 uppercase tracking-wide">3. Zombie Pace (Difficulty)</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <button data-speed="6" class="speed-select-btn bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs py-2 rounded-lg text-center font-bold">
+                        Walker<br><span class="text-[10px] font-normal text-slate-400">6 km/h</span>
+                    </button>
+                    <button data-speed="9" class="speed-select-btn bg-red-950/50 border-red-600 text-red-400 text-xs py-2 rounded-lg text-center font-bold ring-2 ring-red-500">
+                        Jogger<br><span class="text-[10px] font-normal text-slate-400">9 km/h</span>
+                    </button>
+                    <button data-speed="12" class="speed-select-btn bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs py-2 rounded-lg text-center font-bold">
+                        Runner<br><span class="text-[10px] font-normal text-slate-400">12 km/h</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Start Game Trigger -->
+            <button id="btn-start-game" disabled class="w-full bg-gradient-to-r from-red-700 to-red-600 disabled:opacity-50 disabled:cursor-not-allowed hover:from-red-600 hover:to-red-500 text-white font-black text-base py-3.5 rounded-xl shadow-lg shadow-red-900/40 uppercase tracking-widest transition">
+                Initialize Survival Run
+            </button>
+        </div>
+    </div>
+
+    <!-- GAME OVER / VICTORY MODAL -->
+    <div id="gameover-modal" class="hidden absolute inset-0 z-40 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl">
+            <div id="end-icon-container" class="inline-flex p-4 bg-red-950/60 rounded-full border border-red-800">
+                <i id="end-icon" class="fa-solid fa-skull text-5xl text-red-500"></i>
+            </div>
+            <h2 id="end-title" class="text-2xl font-black text-slate-100 uppercase tracking-wide">YOU WERE OVERRUN</h2>
+            <p id="end-subtitle" class="text-xs text-slate-400">The horde caught up with you in the streets.</p>
+            
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 font-mono text-sm">
+                <div class="flex justify-between text-slate-400">
+                    <span>Total Score:</span>
+                    <span id="end-score" class="text-amber-400 font-bold">0</span>
+                </div>
+                <div class="flex justify-between text-slate-400">
+                    <span>Supplies Collected:</span>
+                    <span id="end-supplies" class="text-cyan-400 font-bold">0</span>
+                </div>
+                <div class="flex justify-between text-slate-400">
+                    <span>Distance Covered:</span>
+                    <span id="end-dist" class="text-emerald-400 font-bold">0.0 km</span>
+                </div>
+            </div>
+
+            <button id="btn-restart" class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-bold py-3 rounded-xl transition">
+                Try Again
+            </button>
+        </div>
+    </div>
+
+    <!-- AUDIO ENGINE & GAME LOGIC -->
+    <script>
+        /**
+         * Web Audio API Synthesizer (No external sound files required)
+         */
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+                this.sirenOsc = null;
+                this.sirenGain = null;
+                this.isSirenPlaying = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            playCollect() {
+                if (this.muted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(523.25, now); // C5
+                osc.frequency.exponentialRampToValueAtTime(880, now + 0.15); // A5
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            }
+
+            playDamage() {
+                if (this.muted || !this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(140, now);
+                osc.frequency.linearRampToValueAtTime(40, now + 0.25);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now);
+                osc.stop(now + 0.25);
+            }
+
+            startSiren() {
+                if (this.muted || !this.ctx || this.isSirenPlaying) return;
+                try {
+                    const now = this.ctx.currentTime;
+                    this.sirenOsc = this.ctx.createOscillator();
+                    this.sirenGain = this.ctx.createGain();
+                    this.sirenOsc.type = 'triangle';
+                    
+                    // Modulate pitch for siren effect
+                    this.sirenOsc.frequency.setValueAtTime(400, now);
+                    this.sirenOsc.frequency.linearRampToValueAtTime(800, now + 0.5);
+                    
+                    this.sirenGain.gain.setValueAtTime(0.05, now);
+
+                    this.sirenOsc.connect(this.sirenGain);
+                    this.sirenGain.connect(this.ctx.destination);
+                    this.sirenOsc.start(now);
+                    this.isSirenPlaying = true;
+                } catch(e) {}
+            }
+
+            stopSiren() {
+                if (this.sirenOsc && this.isSirenPlaying) {
+                    try {
+                        this.sirenOsc.stop();
+                        this.sirenOsc.disconnect();
+                    } catch(e) {}
+                    this.isSirenPlaying = false;
+                }
+            }
+        }
+
+        // --- GAME ENGINE STATE & VARS ---
+        const audio = new SoundEngine();
+        let map, drawControl;
+        let homePos = null; // {lat, lng}
+        let playerPos = null; // {lat, lng}
+        let playerMarker = null;
+        let boundaryLayer = null;
+        let boundaryGeoJSON = null;
+        
+        let simulationMode = false;
+        let watchId = null;
+
+        // Walkable street/park graph structure for Zombie navigation
+        let walkableGraphNodes = []; // [{id, lat, lng, neighbors: [nodeIndex]}]
+        let walkablePolygons = [];  // Array of L.LatLng arrays for parks/fields
+
+        // Configs & Stats
+        let zombieSpeedKmH = 9; // default jogger speed
+        let playerHp = 100;
+        let score = 0;
+        let suppliesCollected = 0;
+        let totalDistanceMeters = 0;
+        let lastPlayerPos = null;
+        let currentSpeedKmH = 0;
+        let gameActive = false;
+
+        // Entities arrays
+        let waypoints = []; // Array of Leaflet markers with meta
+        let zombies = [];   // Array of { marker, lat, lng, speed }
+
+        // Interval references
+        let gameLoopInterval = null;
+        let zombieSpawnInterval = null;
+        let joystickInterval = null;
+        let joystickVector = { x: 0, y: 0 };
+
+        // --- DOM ELEMENTS ---
+        const setupModal = document.getElementById('setup-modal');
+        const gameOverModal = document.getElementById('gameover-modal');
+        const btnGpsHome = document.getElementById('btn-gps-home');
+        const btnMapHome = document.getElementById('btn-map-home');
+        const btnDrawPoly = document.getElementById('btn-draw-poly');
+        const radiusRange = document.getElementById('radius-range');
+        const radiusValDisplay = document.getElementById('radius-val-display');
+        const homeStatus = document.getElementById('home-status');
+        const btnStartGame = document.getElementById('btn-start-game');
+        const simModeBtn = document.getElementById('sim-mode-btn');
+        const simModeText = document.getElementById('sim-mode-text');
+        const simControlsHint = document.getElementById('sim-controls-hint');
+        const audioToggleBtn = document.getElementById('audio-toggle-btn');
+        const audioIcon = document.getElementById('audio-icon');
+        const gpsErrorBanner = document.getElementById('gps-error-banner');
+        const gpsErrorTitle = document.getElementById('gps-error-title');
+        const gpsErrorDesc = document.getElementById('gps-error-desc');
+        const dismissGpsBtn = document.getElementById('dismiss-gps-btn');
+        const joystickContainer = document.getElementById('joystick-container');
+
+        // HUD DOM
+        const hudBottom = document.getElementById('hud-bottom');
+        const hpBar = document.getElementById('hp-bar');
+        const hpText = document.getElementById('hp-text');
+        const hudScore = document.getElementById('hud-score');
+        const hudWaypoints = document.getElementById('hud-waypoints');
+        const hudDistance = document.getElementById('hud-distance');
+        const hudSpeed = document.getElementById('hud-speed');
+        const hudZombies = document.getElementById('hud-zombies');
+        const radarAlert = document.getElementById('radar-alert');
+        const threatDistanceText = document.getElementById('threat-distance');
+        const dangerOverlay = document.getElementById('danger-overlay');
+
+        // --- INITIALIZATION ---
+        window.onload = function() {
+            initMap();
+            setupEventListeners();
+            initJoystick();
+        };
+
+        function initMap() {
+            // Default position (Center of London as placeholder until GPS fix)
+            const defaultLat = 51.505;
+            const defaultLng = -0.09;
+
+            map = L.map('map', {
+                zoomControl: false,
+                attributionControl: false
+            }).setView([defaultLat, defaultLng], 15);
+
+            // Add Dark tiles styling wrapper
+            L.DomUtil.addClass(map._container, 'dark-tiles');
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19
+            }).addTo(map);
+
+            // Try getting initial real position to center map
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(pos => {
+                    const coords = [pos.coords.latitude, pos.coords.longitude];
+                    map.setView(coords, 16);
+                    setHomeLocation(pos.coords.latitude, pos.coords.longitude, "GPS Location Set");
+                }, err => {
+                    handleGpsError(err);
+                }, { timeout: 8000 });
+            } else {
+                handleGpsError({ code: 0, message: "Geolocation API not supported on this browser." });
+            }
+        }
+
+        function handleGpsError(err) {
+            let msg = "Could not access location.";
+            if (err.code === 1) msg = "GPS Permission Denied. Using Manual Simulation Mode.";
+            else if (err.code === 2) msg = "GPS Position Unavailable. Switching to Manual Mode.";
+            else if (err.code === 3) msg = "GPS Signal Timed Out. Switching to Manual Mode.";
+            
+            gpsErrorTitle.innerText = "GPS Error / Fallback";
+            gpsErrorDesc.innerText = msg;
+            gpsErrorBanner.classList.remove('hidden');
+
+            // Force switch to manual mode
+            enableSimulationMode(true);
+        }
+
+        function enableSimulationMode(enable) {
+            simulationMode = enable;
+            if (simulationMode) {
+                simModeText.innerText = "Sim (Manual)";
+                simModeText.classList.replace('text-amber-400', 'text-cyan-400');
+                if (gameActive) {
+                    simControlsHint.classList.remove('hidden');
+                    joystickContainer.classList.remove('hidden');
+                }
+                if (watchId) navigator.geolocation.clearWatch(watchId);
+            } else {
+                simModeText.innerText = "GPS Mode";
+                simModeText.classList.replace('text-cyan-400', 'text-amber-400');
+                simControlsHint.classList.add('hidden');
+                joystickContainer.classList.add('hidden');
+                startGpsTracking();
+            }
+        }
+
+        function setupEventListeners() {
+            dismissGpsBtn.addEventListener('click', () => {
+                gpsErrorBanner.classList.add('hidden');
+            });
+
+            // Audio toggle button
+            audioToggleBtn.addEventListener('click', () => {
+                audio.init();
+                audio.muted = !audio.muted;
+                audioIcon.className = audio.muted ? 
+                    "fa-solid fa-volume-xmark text-slate-500" : 
+                    "fa-solid fa-volume-high text-emerald-400";
+            });
+
+            // Set Home via GPS button
+            btnGpsHome.addEventListener('click', () => {
+                if (navigator.geolocation) {
+                    btnGpsHome.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> Locating...`;
+                    navigator.geolocation.getCurrentPosition(pos => {
+                        btnGpsHome.innerHTML = `<i class="fa-solid fa-location-crosshairs"></i> Use Current GPS`;
+                        setHomeLocation(pos.coords.latitude, pos.coords.longitude, "GPS Home Set");
+                        map.setView([pos.coords.latitude, pos.coords.longitude], 16);
+                        gpsErrorBanner.classList.add('hidden');
+                    }, err => {
+                        btnGpsHome.innerHTML = `<i class="fa-solid fa-location-crosshairs"></i> Use Current GPS`;
+                        handleGpsError(err);
+                    }, { timeout: 7000 });
+                }
+            });
+
+            // Set Home via Map Click
+            let selectingHomeFromMap = false;
+            btnMapHome.addEventListener('click', () => {
+                selectingHomeFromMap = true;
+                homeStatus.innerText = "Click anywhere on the map!";
+                homeStatus.className = "text-amber-400 font-bold text-[10px] animate-pulse";
+            });
+
+            map.on('click', (e) => {
+                if (selectingHomeFromMap) {
+                    setHomeLocation(e.latlng.lat, e.latlng.lng, "Map Location Set");
+                    selectingHomeFromMap = false;
+                } else if (simulationMode && gameActive) {
+                    // In simulation mode, clicking moves player directly
+                    updatePlayerPosition(e.latlng.lat, e.latlng.lng);
+                }
+            });
+
+            // Radius Slider Change
+            radiusRange.addEventListener('input', (e) => {
+                const val = e.target.value;
+                radiusValDisplay.innerText = `Radius: ${val}m`;
+                if (homePos) {
+                    renderRadiusBoundary(val);
+                }
+            });
+
+            // Custom Draw Boundary
+            btnDrawPoly.addEventListener('click', () => {
+                setupModal.classList.add('hidden');
+                enablePolygonDrawing();
+            });
+
+            // Speed Selector Buttons
+            document.querySelectorAll('.speed-select-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll('.speed-select-btn').forEach(b => {
+                        b.classList.remove('ring-2', 'ring-red-500', 'bg-red-950/50', 'text-red-400');
+                        b.classList.add('bg-slate-800', 'text-slate-300');
+                    });
+                    const target = e.currentTarget;
+                    target.classList.remove('bg-slate-800', 'text-slate-300');
+                    target.classList.add('ring-2', 'ring-red-500', 'bg-red-950/50', 'text-red-400');
+                    zombieSpeedKmH = parseFloat(target.getAttribute('data-speed'));
+                });
+            });
+
+            // Start Game
+            btnStartGame.addEventListener('click', () => {
+                audio.init();
+                startGame();
+            });
+
+            // Simulation mode toggle
+            simModeBtn.addEventListener('click', () => {
+                enableSimulationMode(!simulationMode);
+            });
+
+            // Keyboard navigation for Simulation mode
+            window.addEventListener('keydown', (e) => {
+                if (!simulationMode || !gameActive || !playerPos) return;
+                const step = 0.00015; // aprox 12-15 meters per key press
+                let lat = playerPos.lat;
+                let lng = playerPos.lng;
+
+                switch (e.key.toLowerCase()) {
+                    case 'w': case 'arrowup': lat += step; break;
+                    case 's': case 'arrowdown': lat -= step; break;
+                    case 'a': case 'arrowleft': lng -= step; break;
+                    case 'd': case 'arrowright': lng += step; break;
+                    default: return;
+                }
+                updatePlayerPosition(lat, lng);
+            });
+
+            // Restart Button
+            document.getElementById('btn-restart').addEventListener('click', () => {
+                location.reload();
+            });
+        }
+
+        // --- VIRTUAL JOYSTICK FOR MOBILE / INDOOR MANUAL CONTROLS ---
+        function initJoystick() {
+            const base = document.getElementById('joystick-base');
+            const stick = document.getElementById('joystick-stick');
+            let active = false;
+            let center = { x: 0, y: 0 };
+
+            const onStart = (e) => {
+                active = true;
+                const rect = base.getBoundingClientRect();
+                center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                onMove(e);
+            };
+
+            const onMove = (e) => {
+                if (!active) return;
+                const touch = e.touches ? e.touches[0] : e;
+                const dx = touch.clientX - center.x;
+                const dy = touch.clientY - center.y;
+                const dist = Math.min(Math.hypot(dx, dy), 40);
+                const angle = Math.atan2(dy, dx);
+
+                const stickX = Math.cos(angle) * dist;
+                const stickY = Math.sin(angle) * dist;
+
+                stick.style.transform = `translate(${stickX}px, ${stickY}px)`;
+                
+                // Set movement vector normalized (-1 to 1)
+                joystickVector.x = stickX / 40;
+                joystickVector.y = stickY / 40;
+            };
+
+            const onEnd = () => {
+                active = false;
+                stick.style.transform = `translate(0px, 0px)`;
+                joystickVector = { x: 0, y: 0 };
+            };
+
+            base.addEventListener('touchstart', onStart);
+            window.addEventListener('touchmove', onMove);
+            window.addEventListener('touchend', onEnd);
+            base.addEventListener('mousedown', onStart);
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onEnd);
+
+            // Continuously apply joystick movement
+            setInterval(() => {
+                if (!gameActive || !simulationMode || (joystickVector.x === 0 && joystickVector.y === 0)) return;
+                const speedStep = 0.00012; // ~12m
+                const newLat = playerPos.lat - (joystickVector.y * speedStep);
+                const newLng = playerPos.lng + (joystickVector.x * speedStep);
+                updatePlayerPosition(newLat, newLng);
+            }, 100);
+        }
+
+        // --- SET LOCATION & BOUNDARY LOGIC ---
+
+        function setHomeLocation(lat, lng, statusText) {
+            homePos = { lat, lng };
+            playerPos = { lat, lng };
+            homeStatus.innerText = statusText;
+            homeStatus.className = "text-emerald-400 text-[10px] font-mono";
+
+            // Render/Update Default Radius Boundary
+            renderRadiusBoundary(radiusRange.value);
+
+            // Enable Start Button
+            btnStartGame.disabled = false;
+        }
+
+        function renderRadiusBoundary(radiusMeters) {
+            if (!homePos) return;
+            if (boundaryLayer) map.removeLayer(boundaryLayer);
+
+            boundaryLayer = L.circle([homePos.lat, homePos.lng], {
+                radius: parseInt(radiusMeters),
+                color: '#06b6d4',
+                weight: 2,
+                fillColor: '#0891b2',
+                fillOpacity: 0.15,
+                dashArray: '6, 6'
+            }).addTo(map);
+
+            boundaryGeoJSON = boundaryLayer.toGeoJSON();
+        }
+
+        function enablePolygonDrawing() {
+            // Add notification bar
+            const drawNotice = document.createElement('div');
+            drawNotice.id = 'draw-notice';
+            drawNotice.className = "absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-cyan-950 border border-cyan-500 text-cyan-200 px-4 py-2 rounded-xl text-xs font-bold shadow-xl flex items-center space-x-3";
+            drawNotice.innerHTML = `
+                <span>Click points on map to draw custom boundary polygon.</span>
+                <button id="finish-draw-btn" class="bg-cyan-600 hover:bg-cyan-500 text-white px-2.5 py-1 rounded-lg">Done</button>
+            `;
+            document.body.appendChild(drawNotice);
+
+            // Leaflet Draw feature group
+            const drawnItems = new L.FeatureGroup();
+            map.addLayer(drawnItems);
+
+            const polygonDrawer = new L.Draw.Polygon(map, {
+                shapeOptions: {
+                    color: '#06b6d4',
+                    fillColor: '#0891b2',
+                    fillOpacity: 0.2
+                }
+            });
+            polygonDrawer.enable();
+
+            map.on(L.Draw.Event.CREATED, function (e) {
+                const layer = e.layer;
+                if (boundaryLayer) map.removeLayer(boundaryLayer);
+                boundaryLayer = layer;
+                map.addLayer(boundaryLayer);
+                boundaryGeoJSON = boundaryLayer.toGeoJSON();
+
+                // Set home pos to polygon centroid if not set
+                const bounds = layer.getBounds();
+                const center = bounds.getCenter();
+                setHomeLocation(center.lat, center.lng, "Polygon Area Set");
+
+                document.getElementById('draw-notice')?.remove();
+                setupModal.classList.remove('hidden');
+            });
+
+            document.getElementById('finish-draw-btn')?.addEventListener('click', () => {
+                polygonDrawer.completeShape();
+            });
+        }
+
+        // --- GAME START & ENGINE LOOP ---
+
+        function startGame() {
+            setupModal.classList.add('hidden');
+            hudBottom.classList.remove('hidden');
+            hudBottom.classList.add('flex');
+            gameActive = true;
+
+            // Render Player Marker
+            createPlayerMarker(playerPos.lat, playerPos.lng);
+
+            // Fetch Walkable Graph (Streets & Parks) & Supply Waypoints
+            fetchWalkableStreetAndParkGraph();
+
+            // Start Geolocation or Simulation
+            if (!simulationMode) {
+                startGpsTracking();
+            } else {
+                simControlsHint.classList.remove('hidden');
+                joystickContainer.classList.remove('hidden');
+            }
+
+            // Start Zombie Spawns
+            zombieSpawnInterval = setInterval(spawnZombie, 12000); // New zombie every 12s
+            spawnZombie(); // Initial zombie
+
+            // Main Game Loop (1 FPS tick for updates)
+            gameLoopInterval = setInterval(gameLoopTick, 1000);
+        }
+
+        function createPlayerMarker(lat, lng) {
+            const playerIcon = L.divIcon({
+                className: 'player-pulse-marker',
+                html: `
+                    <div class="pulse-ring"></div>
+                    <div class="w-7 h-7 bg-emerald-500 border-2 border-white rounded-full flex items-center justify-center shadow-lg">
+                        <i class="fa-solid fa-person-running text-slate-950 text-sm"></i>
+                    </div>
+                `,
+                iconSize: [36, 36],
+                iconAnchor: [18, 18]
+            });
+
+            playerMarker = L.marker([lat, lng], { icon: playerIcon }).addTo(map);
+        }
+
+        function startGpsTracking() {
+            if (navigator.geolocation) {
+                watchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        updatePlayerPosition(pos.coords.latitude, pos.coords.longitude, pos.coords.speed);
+                    },
+                    (err) => handleGpsError(err),
+                    { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+                );
+            } else {
+                handleGpsError({ code: 0, message: "Geolocation not supported." });
+            }
+        }
+
+        function updatePlayerPosition(lat, lng, speedMs = null) {
+            if (!gameActive) return;
+
+            const newPos = { lat, lng };
+
+            if (lastPlayerPos) {
+                const distMoved = getDistanceMeters(lastPlayerPos.lat, lastPlayerPos.lng, lat, lng);
+                totalDistanceMeters += distMoved;
+
+                // Calculate speed if not directly provided by GPS
+                if (speedMs !== null && speedMs !== undefined && !isNaN(speedMs)) {
+                    currentSpeedKmH = (speedMs * 3.6);
+                } else {
+                    currentSpeedKmH = (distMoved * 3.6); // 1-sec tick approximation
+                }
+            }
+
+            playerPos = newPos;
+            lastPlayerPos = newPos;
+
+            if (playerMarker) {
+                playerMarker.setLatLng([lat, lng]);
+            }
+            map.panTo([lat, lng]);
+
+            // Check supply collections
+            checkWaypointCollisions();
+            updateHUD();
+        }
+
+        // --- OVERPASS API: STREETS, SIDEWALKS & PARKS WALKABLE GRAPH ---
+
+        async function fetchWalkableStreetAndParkGraph() {
+            hudWaypoints.innerText = "Building Street Graph...";
+            
+            // Bounding box from boundary layer
+            const bounds = boundaryLayer.getBounds();
+            const s = bounds.getSouth(), w = bounds.getWest(), n = bounds.getNorth(), e = bounds.getEast();
+
+            // Query streets, footways, paths, parks, pitches, gardens, meadows
+            const query = `
+                [out:json][timeout:15];
+                (
+                  way["highway"](${s},${w},${n},${e});
+                  way["leisure"~"park|pitch|garden|playground"](${s},${w},${n},${e});
+                  way["landuse"~"grass|meadow|recreation_ground"](${s},${w},${n},${e});
+                );
+                out body;
+                >;
+                out skel qt;
+            `;
+            const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                
+                if (data.elements && data.elements.length > 0) {
+                    buildSpatialGraphFromOSM(data.elements);
+                } else {
+                    buildFallbackGraph();
+                }
+            } catch (err) {
+                console.warn("Overpass API graph build failed. Using fallback street grid.");
+                buildFallbackGraph();
+            }
+
+            // Scatter waypoints on graph nodes
+            populateSupplyWaypointsFromGraph();
+        }
+
+        function buildSpatialGraphFromOSM(elements) {
+            const nodeMap = new Map();
+            walkableGraphNodes = [];
+            walkablePolygons = [];
+
+            // 1. Collect nodes
+            elements.forEach(el => {
+                if (el.type === 'node') {
+                    nodeMap.set(el.id, { id: el.id, lat: el.lat, lng: el.lon, neighbors: new Set() });
+                }
+            });
+
+            // 2. Connect edges along ways (streets, paths, parks)
+            elements.forEach(el => {
+                if (el.type === 'way' && el.nodes && el.nodes.length > 1) {
+                    for (let i = 0; i < el.nodes.length - 1; i++) {
+                        const n1 = nodeMap.get(el.nodes[i]);
+                        const n2 = nodeMap.get(el.nodes[i + 1]);
+                        if (n1 && n2) {
+                            n1.neighbors.add(n2);
+                            n2.neighbors.add(n1);
+                        }
+                    }
+
+                    // Store park/green space polygons if applicable
+                    if (el.tags && (el.tags.leisure || el.tags.landuse)) {
+                        const polyCoords = el.nodes.map(nid => nodeMap.get(nid)).filter(Boolean);
+                        if (polyCoords.length > 2) {
+                            walkablePolygons.push(polyCoords);
+                        }
+                    }
+                }
+            });
+
+            // Convert neighbors to array
+            nodeMap.forEach(n => {
+                n.neighbors = Array.from(n.neighbors);
+                walkableGraphNodes.push(n);
+            });
+
+            if (walkableGraphNodes.length === 0) {
+                buildFallbackGraph();
+            }
+        }
+
+        function buildFallbackGraph() {
+            // Create a synthetic 5x5 street grid near home
+            walkableGraphNodes = [];
+            const centerLat = homePos.lat;
+            const centerLng = homePos.lng;
+            const gridScale = 0.0015;
+
+            for (let i = -2; i <= 2; i++) {
+                for (let j = -2; j <= 2; j++) {
+                    walkableGraphNodes.push({
+                        id: `grid_${i}_${j}`,
+                        lat: centerLat + (i * gridScale),
+                        lng: centerLng + (j * gridScale),
+                        neighbors: []
+                    });
+                }
+            }
+
+            // Link grid neighbors
+            walkableGraphNodes.forEach((node, idx) => {
+                walkableGraphNodes.forEach((other, oIdx) => {
+                    if (idx !== oIdx) {
+                        const d = getDistanceMeters(node.lat, node.lng, other.lat, other.lng);
+                        if (d < 200) node.neighbors.push(other);
+                    }
+                });
+            });
+        }
+
+        function populateSupplyWaypointsFromGraph() {
+            waypoints = [];
+            const sampleNodes = [...walkableGraphNodes].sort(() => 0.5 - Math.random()).slice(0, 8);
+
+            sampleNodes.forEach(node => {
+                createSupplyWaypoint(node.lat, node.lng);
+            });
+
+            hudWaypoints.innerText = `0/${waypoints.length}`;
+        }
+
+        function createSupplyWaypoint(lat, lng) {
+            const types = [
+                { name: 'Medkit', icon: 'fa-kit-medical', color: 'text-red-400', bg: 'bg-red-950', pts: 150, hp: 25 },
+                { name: 'Rations', icon: 'fa-box-tissue', color: 'text-amber-400', bg: 'bg-amber-950', pts: 100, hp: 10 },
+                { name: 'Ammo Pack', icon: 'fa-shield-halved', color: 'text-cyan-400', bg: 'bg-cyan-950', pts: 200, hp: 0 }
+            ];
+            const type = types[Math.floor(Math.random() * types.length)];
+
+            const icon = L.divIcon({
+                className: 'supply-marker',
+                html: `
+                    <div class="w-8 h-8 ${type.bg} border border-slate-600 rounded-lg flex items-center justify-center shadow-lg transition transform hover:scale-110">
+                        <i class="fa-solid ${type.icon} ${type.color} text-sm"></i>
+                    </div>
+                `,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+
+            const marker = L.marker([lat, lng], { icon }).addTo(map);
+            waypoints.push({ marker, lat, lng, type, collected: false });
+        }
+
+        function checkWaypointCollisions() {
+            waypoints.forEach(wp => {
+                if (wp.collected) return;
+                const dist = getDistanceMeters(playerPos.lat, playerPos.lng, wp.lat, wp.lng);
+                
+                // Pickup radius <= 20 meters
+                if (dist <= 20) {
+                    wp.collected = true;
+                    map.removeLayer(wp.marker);
+
+                    score += wp.type.pts;
+                    suppliesCollected++;
+                    playerHp = Math.min(100, playerHp + wp.type.hp);
+
+                    audio.playCollect();
+
+                    // Show temporary floating text notification
+                    showFloatingNotification(`+${wp.type.pts} PTS (${wp.type.name})`, '#10b981');
+                }
+            });
+        }
+
+        // --- MAP-CONSTRAINED ZOMBIE PATHFINDING LOGIC ---
+
+        function getClosestGraphNode(lat, lng) {
+            let closest = null;
+            let minDist = Infinity;
+
+            for (let i = 0; i < walkableGraphNodes.length; i++) {
+                const n = walkableGraphNodes[i];
+                const d = getDistanceMeters(lat, lng, n.lat, n.lng);
+                if (d < minDist) {
+                    minDist = d;
+                    closest = n;
+                }
+            }
+            return closest;
+        }
+
+        function isPointInWalkablePolygon(lat, lng) {
+            // Check if point resides inside any green space/park polygon
+            for (let p = 0; p < walkablePolygons.length; p++) {
+                const poly = walkablePolygons[p];
+                let inside = false;
+                for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                    const xi = poly[i].lat, yi = poly[i].lng;
+                    const xj = poly[j].lat, yj = poly[j].lng;
+                    const intersect = ((yi > lng) !== (yj > lng)) &&
+                        (lat < (xj - xi) * (lng - yi) / (yj - yi) + xi);
+                    if (intersect) inside = !inside;
+                }
+                if (inside) return true;
+            }
+            return false;
+        }
+
+        function spawnZombie() {
+            if (!gameActive || zombies.length >= 8 || walkableGraphNodes.length === 0) return;
+
+            // Pick a graph node 100m-250m away from player
+            const validNodes = walkableGraphNodes.filter(n => {
+                const d = getDistanceMeters(playerPos.lat, playerPos.lng, n.lat, n.lng);
+                return d >= 80 && d <= 300;
+            });
+
+            const spawnNode = validNodes.length > 0 ? 
+                validNodes[Math.floor(Math.random() * validNodes.length)] : 
+                walkableGraphNodes[Math.floor(Math.random() * walkableGraphNodes.length)];
+
+            const zombieIcon = L.divIcon({
+                className: 'zombie-marker',
+                html: `
+                    <div class="zombie-pulse-ring"></div>
+                    <div class="w-8 h-8 bg-red-950 border-2 border-red-600 rounded-full flex items-center justify-center shadow-xl">
+                        <i class="fa-solid fa-biohazard text-red-500 text-sm animate-pulse"></i>
+                    </div>
+                `,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            });
+
+            const marker = L.marker([spawnNode.lat, spawnNode.lng], { icon: zombieIcon }).addTo(map);
+            zombies.push({ 
+                marker, 
+                lat: spawnNode.lat, 
+                lng: spawnNode.lng,
+                currentNode: spawnNode
+            });
+        }
+
+        function moveZombies() {
+            let minDistance = Infinity;
+            const speedMps = (zombieSpeedKmH * 1000) / 3600;
+
+            const playerNearestNode = getClosestGraphNode(playerPos.lat, playerPos.lng);
+
+            zombies.forEach(z => {
+                const distToPlayer = getDistanceMeters(z.lat, z.lng, playerPos.lat, playerPos.lng);
+                if (distToPlayer < minDistance) minDistance = distToPlayer;
+
+                // 1. If zombie is inside a park polygon or very close to player (< 25m), pursue player directly over open field
+                if (distToPlayer <= 25 || isPointInWalkablePolygon(z.lat, z.lng)) {
+                    stepDirectlyTowards(z, playerPos.lat, playerPos.lng, speedMps);
+                } else {
+                    // 2. Otherwise, navigate street graph nodes towards player's nearest node
+                    const zNode = z.currentNode || getClosestGraphNode(z.lat, z.lng);
+                    
+                    if (zNode && zNode.neighbors && zNode.neighbors.length > 0) {
+                        // Find neighbor node that minimizes distance to player
+                        let bestNeighbor = zNode;
+                        let bestDist = getDistanceMeters(zNode.lat, zNode.lng, playerPos.lat, playerPos.lng);
+
+                        zNode.neighbors.forEach(nb => {
+                            const d = getDistanceMeters(nb.lat, nb.lng, playerPos.lat, playerPos.lng);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestNeighbor = nb;
+                            }
+                        });
+
+                        // Step towards best neighbor node
+                        const distToNode = getDistanceMeters(z.lat, z.lng, bestNeighbor.lat, bestNeighbor.lng);
+                        if (distToNode < 3) {
+                            z.currentNode = bestNeighbor; // Arrived at node
+                        }
+                        stepDirectlyTowards(z, bestNeighbor.lat, bestNeighbor.lng, speedMps);
+                    } else {
+                        // Fallback step
+                        stepDirectlyTowards(z, playerPos.lat, playerPos.lng, speedMps);
+                    }
+                }
+
+                z.marker.setLatLng([z.lat, z.lng]);
+
+                // Zombie Attack Radius <= 6 meters
+                if (distToPlayer <= 6) {
+                    playerHp = Math.max(0, playerHp - 8);
+                    audio.playDamage();
+                    showFloatingNotification("-8 HP OVERRUN!", '#ef4444');
+                }
+            });
+
+            return minDistance;
+        }
+
+        function stepDirectlyTowards(z, targetLat, targetLng, speedMps) {
+            const dLat = targetLat - z.lat;
+            const dLng = targetLng - z.lng;
+            const angle = Math.atan2(dLat, dLng);
+
+            const moveStepLat = (Math.sin(angle) * speedMps) / 111000;
+            const moveStepLng = (Math.cos(angle) * speedMps) / (111000 * Math.cos(z.lat * Math.PI / 180));
+
+            z.lat += moveStepLat;
+            z.lng += moveStepLng;
+        }
+
+        // --- MAIN GAME LOOP TICK ---
+
+        function gameLoopTick() {
+            if (!gameActive) return;
+
+            const nearestZombieDist = moveZombies();
+
+            // Threat Audio & Screen Alerts
+            if (nearestZombieDist <= 40) {
+                radarAlert.classList.remove('hidden');
+                radarAlert.classList.add('flex');
+                threatDistanceText.innerText = `NEAREST: ${Math.round(nearestZombieDist)}m`;
+                dangerOverlay.classList.add('danger-flash');
+                audio.startSiren();
+            } else {
+                radarAlert.classList.add('hidden');
+                dangerOverlay.classList.remove('danger-flash');
+                audio.stopSiren();
+            }
+
+            // Check Game Over Condition
+            if (playerHp <= 0) {
+                triggerGameOver(false);
+            }
+
+            // Check Victory Condition (All waypoints collected)
+            const remaining = waypoints.filter(w => !w.collected).length;
+            if (waypoints.length > 0 && remaining === 0) {
+                triggerGameOver(true);
+            }
+
+            updateHUD();
+        }
+
+        function updateHUD() {
+            hpBar.style.width = `${playerHp}%`;
+            hpText.innerText = `${playerHp} HP`;
+            hudScore.innerText = score;
+            
+            const remaining = waypoints.filter(w => !w.collected).length;
+            hudWaypoints.innerText = `${waypoints.length - remaining}/${waypoints.length}`;
+            hudDistance.innerText = `${(totalDistanceMeters / 1000).toFixed(2)} km`;
+            hudSpeed.innerText = `${currentSpeedKmH.toFixed(1)} km/h`;
+            hudZombies.innerText = zombies.length;
+        }
+
+        function triggerGameOver(isVictory) {
+            gameActive = false;
+            clearInterval(gameLoopInterval);
+            clearInterval(zombieSpawnInterval);
+            audio.stopSiren();
+
+            const endTitle = document.getElementById('end-title');
+            const endSub = document.getElementById('end-subtitle');
+            const endIcon = document.getElementById('end-icon');
+            const endIconContainer = document.getElementById('end-icon-container');
+
+            if (isVictory) {
+                endTitle.innerText = "ZONE CLEARED!";
+                endTitle.className = "text-2xl font-black text-emerald-400 uppercase tracking-wide";
+                endSub.innerText = "You retrieved all supply crates and survived the outbreak!";
+                endIcon.className = "fa-solid fa-trophy text-5xl text-emerald-400";
+                endIconContainer.className = "inline-flex p-4 bg-emerald-950/60 rounded-full border border-emerald-800";
+            } else {
+                endTitle.innerText = "YOU WERE OVERRUN";
+                endTitle.className = "text-2xl font-black text-red-500 uppercase tracking-wide";
+                endSub.innerText = "The horde overwhelmed your defenses in the field.";
+                endIcon.className = "fa-solid fa-skull text-5xl text-red-500";
+                endIconContainer.className = "inline-flex p-4 bg-red-950/60 rounded-full border border-red-800";
+            }
+
+            document.getElementById('end-score').innerText = score;
+            document.getElementById('end-supplies').innerText = suppliesCollected;
+            document.getElementById('end-dist').innerText = `${(totalDistanceMeters / 1000).toFixed(2)} km`;
+
+            gameOverModal.classList.remove('hidden');
+        }
+
+        // --- HELPER UTILITIES ---
+
+        // Distance formula using Haversine
+        function getDistanceMeters(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // Earth radius in meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c;
+        }
+
+        function showFloatingNotification(text, color) {
+            const toast = document.createElement('div');
+            toast.className = `fixed top-16 left-1/2 -translate-x-1/2 z-50 font-black text-sm px-4 py-1.5 rounded-full shadow-2xl backdrop-blur-md border border-slate-700 animate-bounce`;
+            toast.style.color = color;
+            toast.style.backgroundColor = 'rgba(15, 23, 42, 0.9)';
+            toast.innerText = text;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 2000);
+        }
+    </script>
+</body>
+</html>
